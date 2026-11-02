@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Run {
+  id              String      @id @default(cuid())
+  scenarioId      String      // S1 | S2 | S3
+  mode            String      // baseline | protected
+  declaredTask    String
+  status          String      // created | running | paused_held | frozen | completed | failed
+  stepCount       Int         @default(0)
+  heldAction      Json?
+  permissionState Json
+  ipHash          String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  events          Event[]
+  briefings       Briefing[]
+  rules           Rule[]
+
+  @@index([scenarioId])
+  @@index([status])
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  runId     String
+  seq       Int
+  type      String
+  at        DateTime @default(now())
+  payload   Json
+  prevHash  String
+  hash      String
+
+  run       Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([runId])
+  @@index([seq])
+}
+
+model Rule {
+  id          String   @id @default(cuid())
+  runId       String
+  sourceText  String
+  restriction Json
+  status      String   @default("draft") // draft | active | rejected
+  activatedBy String?
+  createdAt   DateTime @default(now())
+
+  run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+}
+
+model Briefing {
+  id          String   @id @default(cuid())
+  runId       String
+  incidentKey String
+  content     Json
+  createdAt   DateTime @default(now())
+
+  run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([incidentKey])
+}
+
+model SpendLedger {
+  id         String   @id @default(cuid())
+  runId      String?
+  tier       String   // nano | super | ultra | agent
+  model      String
+  tokensIn   Int
+  tokensOut  Int
+  costUsd    Float
+  latencyMs  Int
+  createdAt  DateTime @default(now())
+
+  @@index([runId])
+  @@index([createdAt])
+}
+
+model RateLimit {
+  id          String   @id @default(cuid())
+  ipHash      String
+  windowStart DateTime
+  count       Int      @default(1)
+
+  @@unique([ipHash, windowStart])
+  @@index([ipHash])
+}
+
+model EnvFile {
+  id          String   @id @default(cuid())
+  path        String
+  content     String
+  sensitivity String   // public | internal | sensitive
+  scenarioSet String   @default("all") // all | S1 | S2 | S3
+
+  @@unique([path, scenarioSet])
+  @@index([path])
+}
+
+model EnvInvoice {
+  id            String   @id @default(cuid())
+  invoiceNumber String
+  vendorName    String
+  amount        Float
+  status        String
+  notes         String
+  scenarioSet   String   @default("all") // all | S1 | S2 | S3
+
+  @@unique([invoiceNumber, scenarioSet])
+  @@index([invoiceNumber])
+}
+
+model EnvVendor {
+  id           String @id @default(cuid())
+  vendorCode   String @unique
+  name         String
+  contactEmail String
+}
+
+model EnvOutbox {
+  id      String   @id @default(cuid())
+  runId   String
+  to      String
+  subject String
+  body    String
+  sentAt  DateTime @default(now())
+
+  @@index([runId])
+}
+
+model EvalResult {
+  id                String   @id @default(cuid())
+  evalSuite         String
+  tier              String
+  accuracy          Float
+  falsePositiveRate Float
+  missRate          Float
+  p50LatencyMs      Int
+  p95LatencyMs      Int
+  totalCostUsd      Float
+  resultsJson       Json
+  createdAt         DateTime @default(now())
+}

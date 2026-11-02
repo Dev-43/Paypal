@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #08090c;
+  --foreground: #f4f4f6;
+}
+
+body {
+  color: var(--foreground);
+  background-color: #08090c;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Crisp scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #08090c;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #222533;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #35394d;
+}
+
+/* Card utilities with solid color depth (no fuzzy neon glow) */
+.card-dark {
+  background-color: #0e0f14;
+  border: 1px solid #1e212d;
+  border-radius: 14px;
+}
+
+.card-crimson {
+  background-color: #14090d;
+  border: 1px solid #4c111c;
+  border-radius: 14px;
+}
+
+.card-emerald {
+  background-color: #09130e;
+  border: 1px solid #133a28;
+  border-radius: 14px;
+}
+
+.card-amber {
+  background-color: #141108;
+  border: 1px solid #44320e;
+  border-radius: 14px;
+}
+
+.card-purple {
+  background-color: #100c19;
+  border: 1px solid #321c4e;
+  border-radius: 14px;
+}

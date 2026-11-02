@@ -26,7 +26,7 @@ This is a NEW repository named `pawl`. The Taut repo (`github.com/Dev-43/Jarvis`
 | Styling | Tailwind CSS | same config approach as Taut |
 | Database | Neon Postgres via Prisma | same as Taut |
 | Tests | Vitest | same as Taut |
-| PayPal | `@paypal/agent-toolkit` (TypeScript) against the PayPal sandbox | pin an EXACT version chosen in Task 1.2. Never `latest`. |
+| PayPal | `@paypal/agent-toolkit` (TypeScript) against the PayPal sandbox | pinned to `1.11.0`. Never `latest`. |
 | Watcher + Interpreter models | NVIDIA Nemotron tiers on Nebius Token Factory | same tier roles as Taut |
 | Target agent model | chosen by measurement in Task 4.3 among Nemotron Super and Gemini Flash | highest measured fool rate wins |
 | Fallback model | Gemini free tier via plain HTTPS fetch | no new package |

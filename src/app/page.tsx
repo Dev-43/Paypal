@@ -7,9 +7,9 @@ export default function HomePage() {
       <div className="space-y-6 pt-2">
         <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-md bg-[#0c0d14] border border-[#23242c] text-xs font-mono">
           <span className="w-2 h-2 rounded-full bg-[#76b900] animate-pulse"></span>
-          <span className="text-zinc-300 font-medium">Nebius x NVIDIA Global AI Hackathon</span>
+          <span className="text-zinc-300 font-medium">PayPal AI Hackathon</span>
           <span className="text-zinc-600">•</span>
-          <span className="text-[#76b900] font-semibold">Best Apps & Agents Track</span>
+          <span className="text-[#76b900] font-semibold">Autonomous Agent Guard</span>
         </div>
 
         <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white max-w-4xl leading-[1.12]">
@@ -228,7 +228,7 @@ export default function HomePage() {
                 </span>
                 <span className="text-xs text-rose-400 font-semibold flex items-center space-x-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
-                  <span>Main Hackathon Demo</span>
+                  <span>Headline Demo</span>
                 </span>
               </div>
               <h3 className="text-sm font-bold text-white">Indirect Prompt Injection & Exfiltration</h3>
@@ -273,3 +273,4 @@ export default function HomePage() {
     </div>
   );
 }
+

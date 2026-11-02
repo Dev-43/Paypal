@@ -3,9 +3,9 @@ import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Taut — Runtime AI Safety Gateway for Autonomous Agents",
+  title: "Pawl — Tighten-Only Guard Layer for Autonomous Agents",
   description:
-    "Runtime AI safety gateway powered by NVIDIA Nemotron on Nebius Token Factory. Deterministic hard limits, tiered overseer judgment, and a one-way permission ratchet.",
+    "Tighten-only guard layer between an AI agent and PayPal's agent-toolkit tools in sandbox. Deterministic money rules, intent Watcher, human approval, and ledger truth.",
 };
 
 export default function RootLayout({
@@ -38,10 +38,10 @@ export default function RootLayout({
                 </div>
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-base tracking-tight text-white font-sans">
-                    Taut
+                    Pawl
                   </span>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/80 font-bold uppercase tracking-wider">
-                    Oversight
+                    Guard
                   </span>
                 </div>
               </Link>
@@ -55,17 +55,17 @@ export default function RootLayout({
                 Architecture
               </Link>
               <Link
-                href="/compare"
+                href="/simulator"
                 className="font-semibold text-rose-300 hover:text-white transition-colors flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-rose-950/50 border border-rose-800/70"
               >
-                <span>Live Compare</span>
+                <span>Simulator</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
               </Link>
               <Link
-                href="/metrics"
+                href="/approvals"
                 className="font-medium text-zinc-400 hover:text-white transition-colors"
               >
-                Telemetry & Evals
+                Approvals
               </Link>
               <div className="hidden sm:flex items-center space-x-2 text-zinc-400 text-[11px] font-mono border-l border-[#23242c] pl-4">
                 <span className="text-zinc-500">Nebius Token Factory</span>
@@ -86,13 +86,13 @@ export default function RootLayout({
         <footer className="border-t border-[#23242c] bg-[#07070a] py-6 text-xs text-zinc-500">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-[#76b900]"></span>
+              <span className="w-2 h-2 rounded-full bg-rose-500"></span>
               <p className="text-zinc-400 font-medium">
-                Nebius x NVIDIA Global AI Hackathon • Track: Best Apps & Agents
+                PayPal AI Hackathon
               </p>
             </div>
             <p className="font-mono text-zinc-500 text-[11px]">
-              NVIDIA Nemotron 3 (Nano 30B • Super 120B • Ultra 550B) • Hard Limits H1–H6
+              NVIDIA Nemotron 3 • Tighten-Only Ratchet & Ledger Truth
             </p>
           </div>
         </footer>

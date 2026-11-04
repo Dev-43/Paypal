@@ -1,33 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "../../../lib/db";
 import { checkSpendAndRate, recordIpRun, hashIp } from "../../../lib/guards/spend";
-import { SCENARIOS, createInitialPermissionState } from "../../../lib/agent/scenarios";
+import { getScenario } from "../../../lib/scenarios/definitions";
+import { createInitialPermissionState } from "../../../lib/agent/scenarios";
 import { appendEvent } from "../../../lib/audit/chain";
-import { ScenarioId, Mode } from "../../../contracts";
+import { Mode } from "../../../contracts";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get("x-forwarded-for") || req.ip || "127.0.0.1";
 
-    // 1. Guard check: spend cap and rate limit
+    // 1. Guard check: spend cap and rate limit (10 runs per hour per IP)
     const guard = await checkSpendAndRate(ip);
     if (!guard.ok) {
       return NextResponse.json(
-        { error: { code: "BUDGET_OR_RATE_LIMIT", message: guard.message } },
+        { error: { code: "RATE_LIMIT_EXCEEDED", message: guard.message } },
         { status: 429 }
       );
     }
 
     const body = await req.json();
-    const scenarioId = body.scenarioId as ScenarioId;
-    const mode = body.mode as Mode;
-
-    if (!scenarioId || !SCENARIOS[scenarioId]) {
-      return NextResponse.json(
-        { error: { code: "INVALID_SCENARIO", message: `Invalid scenarioId: ${scenarioId}` } },
-        { status: 400 }
-      );
-    }
+    const scenarioId = body.scenarioId || "custom";
+    const mode = (body.mode || "protected") as Mode;
+    const customTask = body.task as string | undefined;
+    const attackerText = body.attackerText as string | undefined;
 
     if (mode !== "baseline" && mode !== "protected") {
       return NextResponse.json(
@@ -36,7 +34,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const scenario = SCENARIOS[scenarioId];
+    const scenario = getScenario(scenarioId);
+    const declaredTask = customTask || scenario.task;
     const initialPermissionState = createInitialPermissionState();
     const ipHash = hashIp(ip);
 
@@ -48,7 +47,7 @@ export async function POST(req: NextRequest) {
       data: {
         scenarioId,
         mode,
-        declaredTask: scenario.declaredTask,
+        declaredTask,
         status: "created",
         stepCount: 0,
         permissionState: initialPermissionState as any,
@@ -59,24 +58,14 @@ export async function POST(req: NextRequest) {
     // Append run_started audit event
     await appendEvent(run.id, "run_started", {
       scenarioId,
-      scenarioName: scenario.name,
       mode,
-      declaredTask: scenario.declaredTask,
-      initialGrants: initialPermissionState.grants,
+      declaredTask,
+      attackerText: attackerText || scenario.attackerText || null,
+      scopeIds: scenario.scopeIds,
+      model: body.model || "nvidia/nemotron-3-super-120b-a12b",
     });
 
-    return NextResponse.json({
-      run: {
-        id: run.id,
-        scenarioId: run.scenarioId,
-        mode: run.mode,
-        declaredTask: run.declaredTask,
-        status: run.status,
-        stepCount: run.stepCount,
-        heldAction: run.heldAction,
-        createdAt: run.createdAt.toISOString(),
-      },
-    });
+    return NextResponse.json({ runId: run.id }, { status: 201 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal Server Error";
     return NextResponse.json(

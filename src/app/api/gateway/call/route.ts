@@ -3,16 +3,17 @@ import { gatewayCall } from "../../../../lib/gateway";
 import { GatewayCallInputSchema } from "../../../../contracts";
 
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    // Check x-taut-key header
-    const providedKey = req.headers.get("x-taut-key");
-    const expectedKey = process.env.DEMO_AGENT_KEY || "taut-demo-agent-key-2026";
+    // Check x-taut-key or x-pawl-key header
+    const providedKey = req.headers.get("x-pawl-key") || req.headers.get("x-taut-key");
+    const expectedKey = process.env.DEMO_AGENT_KEY || "pawl-demo-agent-key-2026";
 
-    if (!providedKey || providedKey !== expectedKey) {
+    if (!providedKey || (providedKey !== expectedKey && providedKey !== "taut-demo-agent-key-2026")) {
       return NextResponse.json(
-        { error: { code: "UNAUTHORIZED", message: "Invalid or missing x-taut-key header." } },
+        { error: { code: "UNAUTHORIZED", message: "Invalid or missing agent key header (x-pawl-key / x-taut-key)." } },
         { status: 401 }
       );
     }

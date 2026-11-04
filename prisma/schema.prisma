@@ -24,6 +24,7 @@ model Run {
   events          Event[]
   briefings       Briefing[]
   rules           Rule[]
+  approvals       Approval[]
 
   @@index([scenarioId])
   @@index([status])
@@ -164,4 +165,22 @@ model MoneyRuleConfig {
   maxSteps                Int      @default(25)
   updatedBy               String   @default("system")
   updatedAt               DateTime @updatedAt
+}
+
+
+
+model Approval {
+  id        String    @id @default(cuid())
+  runId     String
+  callId    String
+  action    Json
+  status    String    @default("pending") // pending | approved | rejected
+  decidedBy String?
+  decidedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  run       Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([status])
 }

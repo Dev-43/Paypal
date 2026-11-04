@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "../../../../lib/db";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -16,6 +18,12 @@ export async function GET(
 
     const run = await prisma.run.findUnique({
       where: { id },
+      include: {
+        events: {
+          orderBy: { seq: "asc" },
+        },
+        briefings: true,
+      },
     });
 
     if (!run) {
@@ -24,6 +32,19 @@ export async function GET(
         { status: 404 }
       );
     }
+
+    // Extract verdicts and ledger checks from event stream
+    const verdicts = run.events
+      .filter((e) => e.type === "verdict_issued")
+      .map((e) => ({ id: e.id, seq: e.seq, ...(e.payload as any) }));
+
+    const ledgerChecks = run.events
+      .filter((e) => e.type === "action_executed" && (e.payload as any)?.ledgerCheck)
+      .map((e) => (e.payload as any).ledgerCheck);
+
+    const reportCheck = run.events
+      .filter((e) => e.type === "run_completed" && (e.payload as any)?.reportCheck)
+      .map((e) => (e.payload as any).reportCheck)[0] || null;
 
     return NextResponse.json({
       run: {
@@ -34,9 +55,22 @@ export async function GET(
         status: run.status,
         stepCount: run.stepCount,
         heldAction: run.heldAction,
+        permissionState: run.permissionState,
         createdAt: run.createdAt.toISOString(),
       },
-      permissionState: run.permissionState,
+      events: run.events.map((e) => ({
+        id: e.id,
+        seq: e.seq,
+        type: e.type,
+        at: e.at.toISOString(),
+        payload: e.payload,
+        hash: e.hash,
+        prevHash: e.prevHash,
+      })),
+      verdicts,
+      ledgerChecks,
+      reportCheck,
+      briefings: run.briefings,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal Server Error";

@@ -227,7 +227,7 @@ export type Event = z.infer<typeof EventSchema>;
 // 6.9 Run
 // ==========================================
 
-export const ScenarioIdSchema = z.enum(["S1", "S2", "S3"]);
+export const ScenarioIdSchema = z.enum(["S1", "S2", "S3", "S4", "custom"]);
 export type ScenarioId = z.infer<typeof ScenarioIdSchema>;
 
 export const RunSchema = z.object({
@@ -353,5 +353,6 @@ export class ToolError extends Error {
     this.name = "ToolError";
   }
 }
+
 
 

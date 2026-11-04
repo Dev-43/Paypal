@@ -15,9 +15,15 @@ import {
   validateRestriction,
 } from "../policy/ratchet";
 import { appendEvent } from "../audit/chain";
-import { executeTool } from "../env/tools";
+import { executeTool as executeLegacyTool } from "../env/tools";
 import { getSensitivity, emailDomainAllowList } from "../env/policyData";
 import { judgeAction } from "../watcher/watcher";
+import { getRegistryEntry } from "../paypal/registry";
+import { evaluateMoneyRules } from "../rules/money-rules";
+import { executeTool as executePaypalTool } from "../paypal/executor";
+import { performLedgerCheck } from "../ledger/check";
+import { extractUntrustedText } from "./provenance";
+import { briefIncident } from "../interpreter";
 
 // Test hook strictly for unit tests to bypass external network calls
 let testWatcherOverride: ((input: WatcherInput) => Promise<any>) | null = null;
@@ -53,10 +59,343 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
   });
   eventIds.push(proposedEvent.id);
 
-  // BASELINE MODE (Control group: only H1 and H2 run, no Watcher, no ratchet, no holds)
+  const registryEntry = getRegistryEntry(action.tool);
+
+  // ==========================================
+  // PAYPAL TOOL PIPELINE
+  // ==========================================
+  if (registryEntry) {
+    // Check if run is frozen
+    if (state.frozen) {
+      const frozenEvent = await appendEvent(runId, "run_frozen", {
+        reason: "Attempted action on a frozen run.",
+        stepIndex: action.stepIndex,
+      });
+      eventIds.push(frozenEvent.id);
+
+      return {
+        outcome: "frozen",
+        verdict: null,
+        toolResult: null,
+        message: "Run is frozen. A human must unfreeze it.",
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs: 0, watcherMs: 0, totalMs: Date.now() - startTime },
+      };
+    }
+
+    // Check if tool is disabled
+    if (state.disabledTools.includes(action.tool as any)) {
+      const blockedEvent = await appendEvent(runId, "action_blocked", {
+        reason: `Tool '${action.tool}' has been disabled by ratchet.`,
+        stepIndex: action.stepIndex,
+      });
+      eventIds.push(blockedEvent.id);
+
+      return {
+        outcome: "blocked",
+        verdict: null,
+        toolResult: null,
+        message: `Tool '${action.tool}' is disabled.`,
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs: 0, watcherMs: 0, totalMs: Date.now() - startTime },
+      };
+    }
+
+    // Evaluate Deterministic Money Rules P1–P8
+    const hlStart = Date.now();
+    const ruleVerdict = await evaluateMoneyRules({
+      runId,
+      stepIndex: action.stepIndex,
+      tool: action.tool,
+      args: action.args,
+      declaredScopeIds: (run as any).scopeIds || [],
+      allowedTools: state.grants.map((g) => g.tool),
+      accumulatedSpendMinor: 0,
+    });
+    hardLimitMs = Date.now() - hlStart;
+
+    if (ruleVerdict.decision === "frozen") {
+      state = applyRestriction(state, { kind: "freeze_run" }, "hard_limit");
+      await prisma.run.update({
+        where: { id: runId },
+        data: { status: "frozen", permissionState: state as any },
+      });
+      const frozenEv = await appendEvent(runId, "run_frozen", {
+        ruleId: ruleVerdict.ruleId,
+        reason: ruleVerdict.reason,
+      });
+      eventIds.push(frozenEv.id);
+
+      return {
+        outcome: "frozen",
+        verdict: null,
+        toolResult: null,
+        message: ruleVerdict.reason,
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
+      };
+    }
+
+    if (ruleVerdict.decision === "blocked") {
+      const blockedEv = await appendEvent(runId, "action_blocked", {
+        ruleId: ruleVerdict.ruleId,
+        reason: ruleVerdict.reason,
+        stepIndex: action.stepIndex,
+      });
+      eventIds.push(blockedEv.id);
+
+      return {
+        outcome: "blocked",
+        verdict: null,
+        toolResult: null,
+        message: ruleVerdict.reason,
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
+      };
+    }
+
+    if (ruleVerdict.decision === "held" || state.approvalRequiredTools.includes(action.tool as any)) {
+      // Hold for approval
+      await prisma.run.update({
+        where: { id: runId },
+        data: {
+          status: "paused_held",
+          heldAction: action as any,
+        },
+      });
+
+      // Create Approval record
+      try {
+        await (prisma as any).approval.create({
+          data: {
+            runId,
+            callId: proposedEvent.id,
+            action: action as any,
+            status: "pending",
+          },
+        });
+      } catch {
+        // Best-effort
+      }
+
+      const heldEv = await appendEvent(runId, "action_held", {
+        ruleId: ruleVerdict.ruleId,
+        reason: ruleVerdict.reason,
+        heldAction: action,
+      });
+      eventIds.push(heldEv.id);
+
+      return {
+        outcome: "held",
+        verdict: null,
+        toolResult: null,
+        message: ruleVerdict.reason || "Action held for human approver authorization.",
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
+      };
+    }
+
+    // BASELINE MODE: Executes directly once deterministic checks pass
+    if (mode === "baseline") {
+      const exec = await executePaypalTool(action);
+      const execEv = await appendEvent(runId, "action_executed", {
+        tool: action.tool,
+        status: exec.status,
+        result: exec.result,
+      });
+      eventIds.push(execEv.id);
+
+      return {
+        outcome: exec.status === "SUCCESS" ? "executed" : "blocked",
+        verdict: null,
+        toolResult: exec.result,
+        message: exec.error || "Executed successfully (baseline mode).",
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
+      };
+    }
+
+    // PROTECTED MODE: Evaluate Intent Watcher
+    const pastEvents = await prisma.event.findMany({
+      where: { runId },
+      orderBy: { seq: "desc" },
+      take: 10,
+    });
+
+    const recentEvents: RecentEventSummary[] = pastEvents.reverse().map((e) => {
+      const payload = e.payload as Record<string, unknown>;
+      return {
+        tool: (payload.tool as any) || action.tool,
+        target: String(payload.target || payload.id || "/"),
+        outcome: e.type.includes("executed") ? "executed" : "blocked",
+      };
+    });
+
+    // Collect untrusted text read so far
+    const untrustedTextsRead: string[] = [];
+    for (const e of pastEvents) {
+      if (e.type === "action_executed") {
+        const payload = e.payload as any;
+        if (payload?.untrustedText && Array.isArray(payload.untrustedText)) {
+          untrustedTextsRead.push(...payload.untrustedText);
+        }
+      }
+    }
+
+    const watcherInput: WatcherInput = {
+      declaredTask: run.declaredTask,
+      grants: state.grants,
+      action,
+      sensitivity: "internal",
+      recentEvents,
+      lastReadExcerpt: null,
+      untrustedTextsRead,
+    };
+
+    let verdict: Verdict | null = null;
+    const watcherStart = Date.now();
+
+    try {
+      const judgeFn = testWatcherOverride || judgeAction;
+      const watcherResult = await judgeFn(watcherInput);
+      watcherMs = Date.now() - watcherStart;
+      verdict = watcherResult.verdict;
+
+      const verdictEv = await appendEvent(runId, "verdict_issued", {
+        decision: verdict.decision,
+        intentMatch: verdict.intentMatch,
+        confidence: verdict.confidence,
+        reasons: verdict.reasons,
+        evidence: verdict.evidence,
+        tier: verdict.tier,
+      });
+      eventIds.push(verdictEv.id);
+    } catch (err: unknown) {
+      watcherMs = Date.now() - watcherStart;
+      // Fail closed to HELD
+      await prisma.run.update({
+        where: { id: runId },
+        data: { status: "paused_held", heldAction: action as any },
+      });
+      const heldEv = await appendEvent(runId, "action_held", {
+        reason: "Watcher unavailable. Failing closed to held state.",
+        heldAction: action,
+      });
+      eventIds.push(heldEv.id);
+
+      return {
+        outcome: "held",
+        verdict: null,
+        toolResult: null,
+        message: "Held: Watcher service is currently unavailable. Held for manual authorization.",
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+      };
+    }
+
+    // Apply Watcher Tighten or Freeze
+    if (verdict?.decision === "freeze") {
+      state = applyRestriction(state, { kind: "freeze_run" }, "watcher");
+      await prisma.run.update({
+        where: { id: runId },
+        data: { status: "frozen", permissionState: state as any },
+      });
+      return {
+        outcome: "frozen",
+        verdict,
+        toolResult: null,
+        message: `Run frozen by Watcher: ${verdict.reasons.join("; ")}`,
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+      };
+    }
+
+    if (verdict?.decision === "tighten") {
+      for (const r of verdict.restrictions) {
+        const valid = validateRestriction(r);
+        if (valid) {
+          state = applyRestriction(state, valid, "watcher");
+        }
+      }
+      await prisma.run.update({
+        where: { id: runId },
+        data: { permissionState: state as any },
+      });
+      return {
+        outcome: "blocked",
+        verdict,
+        toolResult: null,
+        message: `Blocked by Watcher: ${verdict.reasons.join("; ")}`,
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+      };
+    }
+
+    // Execution & Ledger Read-Back Check
+    const exec = await executePaypalTool(action);
+    const untrustedFields = extractUntrustedText(action.tool, exec.result);
+
+    let ledgerCheckResult = null;
+    if (registryEntry.class === "money_move") {
+      ledgerCheckResult = await performLedgerCheck({
+        callId: proposedEvent.id,
+        envelope: action,
+        executionStatus: exec.status,
+        executionResult: exec.result,
+        currentPermissionState: state,
+      });
+
+      state = ledgerCheckResult.nextPermissionState;
+
+      if (ledgerCheckResult.check.status === "MISMATCH") {
+        await prisma.run.update({
+          where: { id: runId },
+          data: { status: "frozen", permissionState: state as any },
+        });
+
+        // Trigger incident briefing
+        try {
+          await briefIncident(runId);
+        } catch {
+          // Best effort briefing
+        }
+      }
+    }
+
+    const execEv = await appendEvent(runId, "action_executed", {
+      tool: action.tool,
+      status: exec.status,
+      result: exec.result,
+      untrustedText: untrustedFields,
+      ledgerCheck: ledgerCheckResult?.check || null,
+    });
+    eventIds.push(execEv.id);
+
+    return {
+      outcome: exec.status === "SUCCESS" ? "executed" : "blocked",
+      verdict,
+      toolResult: exec.result,
+      message: exec.error || "Executed successfully under protected oversight.",
+      permissionVersion: state.version,
+      eventIds,
+      timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+    };
+  }
+
+  // ==========================================
+  // LEGACY / MOCK TOOL PIPELINE (Ported tests compatibility)
+  // ==========================================
   if (mode === "baseline") {
     const hlStart = Date.now();
-    // For baseline, only check H1 and H2
     const toolGrants = state.grants.filter((g) => g.tool === action.tool);
     let baselineBlocked = false;
     let baselineMsg = "";
@@ -79,20 +418,7 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
     }
     hardLimitMs = Date.now() - hlStart;
 
-    const hlEvent = await appendEvent(runId, "hard_limit_checked", {
-      mode: "baseline",
-      passed: !baselineBlocked,
-      message: baselineMsg || "Passed baseline checks H1-H2",
-    });
-    eventIds.push(hlEvent.id);
-
     if (baselineBlocked) {
-      const blockedEvent = await appendEvent(runId, "action_blocked", {
-        reason: baselineMsg,
-        stepIndex: action.stepIndex,
-      });
-      eventIds.push(blockedEvent.id);
-
       return {
         outcome: "blocked",
         verdict: null,
@@ -100,55 +426,24 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
         message: baselineMsg,
         permissionVersion: state.version,
         eventIds,
-        timings: {
-          hardLimitMs,
-          watcherMs: 0,
-          totalMs: Date.now() - startTime,
-        },
+        timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
       };
     }
 
-    // Execute tool directly
-    try {
-      const toolResult = await executeTool(action.tool, action.args, runId);
-      const executedEvent = await appendEvent(runId, "action_executed", {
-        tool: action.tool,
-        stepIndex: action.stepIndex,
-        success: true,
-      });
-      eventIds.push(executedEvent.id);
-
-      return {
-        outcome: "executed",
-        verdict: null,
-        toolResult,
-        message: "Executed successfully (baseline mode).",
-        permissionVersion: state.version,
-        eventIds,
-        timings: {
-          hardLimitMs,
-          watcherMs: 0,
-          totalMs: Date.now() - startTime,
-        },
-      };
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const errEvent = await appendEvent(runId, "error", { message: errMsg });
-      eventIds.push(errEvent.id);
-      throw err;
-    }
+    const toolResult = await executeLegacyTool(action.tool, action.args, runId);
+    return {
+      outcome: "executed",
+      verdict: null,
+      toolResult,
+      message: "Executed successfully (baseline mode).",
+      permissionVersion: state.version,
+      eventIds,
+      timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
+    };
   }
 
-  // PROTECTED MODE (Full Taut Oversight Layer)
-
-  // Step 1: If frozen -> outcome frozen, message "Run is frozen. A human must unfreeze it."
+  // Legacy Protected Mode
   if (state.frozen) {
-    const frozenEvent = await appendEvent(runId, "run_frozen", {
-      reason: "Attempted action on a frozen run.",
-      stepIndex: action.stepIndex,
-    });
-    eventIds.push(frozenEvent.id);
-
     return {
       outcome: "frozen",
       verdict: null,
@@ -156,44 +451,16 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
       message: "Run is frozen. A human must unfreeze it.",
       permissionVersion: state.version,
       eventIds,
-      timings: {
-        hardLimitMs: 0,
-        watcherMs: 0,
-        totalMs: Date.now() - startTime,
-      },
+      timings: { hardLimitMs: 0, watcherMs: 0, totalMs: Date.now() - startTime },
     };
   }
 
-  // Step 2: Hard Limits H1-H6 in order
   const hlStart = Date.now();
   const hlCheck = checkHardLimits(action, state, emailDomainAllowList);
   hardLimitMs = Date.now() - hlStart;
 
-  const hlEvent = await appendEvent(runId, "hard_limit_checked", {
-    passed: hlCheck.passed,
-    rule: hlCheck.rule,
-    outcome: hlCheck.outcome,
-    message: hlCheck.message,
-  });
-  eventIds.push(hlEvent.id);
-
   if (!hlCheck.passed) {
     if (hlCheck.outcome === "blocked") {
-      const blockedEvent = await appendEvent(runId, "action_blocked", {
-        rule: hlCheck.rule,
-        message: hlCheck.message,
-        stepIndex: action.stepIndex,
-      });
-      eventIds.push(blockedEvent.id);
-
-      if (hlCheck.rule === "H6") {
-        await prisma.run.update({
-          where: { id: runId },
-          data: { status: "completed" },
-        });
-        await appendEvent(runId, "run_completed", { reason: "Budget steps reached" });
-      }
-
       return {
         outcome: "blocked",
         verdict: null,
@@ -201,31 +468,14 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
         message: hlCheck.message || "Action blocked by hard limit.",
         permissionVersion: state.version,
         eventIds,
-        timings: {
-          hardLimitMs,
-          watcherMs: 0,
-          totalMs: Date.now() - startTime,
-        },
+        timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
       };
     }
-
     if (hlCheck.outcome === "held") {
-      // Hold for approval: update run status and heldAction
       await prisma.run.update({
         where: { id: runId },
-        data: {
-          status: "paused_held",
-          heldAction: action as any,
-        },
+        data: { status: "paused_held", heldAction: action as any },
       });
-
-      const heldEvent = await appendEvent(runId, "action_held", {
-        rule: hlCheck.rule,
-        message: hlCheck.message,
-        heldAction: action,
-      });
-      eventIds.push(heldEvent.id);
-
       return {
         outcome: "held",
         verdict: null,
@@ -233,20 +483,14 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
         message: hlCheck.message || "Action held for human approver authorization.",
         permissionVersion: state.version,
         eventIds,
-        timings: {
-          hardLimitMs,
-          watcherMs: 0,
-          totalMs: Date.now() - startTime,
-        },
+        timings: { hardLimitMs, watcherMs: 0, totalMs: Date.now() - startTime },
       };
     }
   }
 
-  // Step 3: Watcher Action Judgment
   const targetPath = (action.args.path as string) || (action.args.target as string) || "";
   const sensitivity = getSensitivity(targetPath);
 
-  // Fetch recent events for context
   const pastEvents = await prisma.event.findMany({
     where: { runId },
     orderBy: { seq: "desc" },
@@ -258,24 +502,9 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
     return {
       tool: (payload.tool as any) || action.tool,
       target: (payload.path as string) || (payload.to as string) || targetPath || "/",
-      outcome: e.type.includes("executed")
-        ? "executed"
-        : e.type.includes("held")
-        ? "held"
-        : e.type.includes("blocked")
-        ? "blocked"
-        : "executed",
+      outcome: "executed",
     };
   });
-
-  // Find last read excerpt if available
-  let lastReadExcerpt: string | null = null;
-  const lastReadEvent = pastEvents.find(
-    (e) => (e.payload as Record<string, unknown>).tool === "read_file"
-  );
-  if (lastReadEvent && (lastReadEvent.payload as Record<string, unknown>).excerpt) {
-    lastReadExcerpt = (lastReadEvent.payload as Record<string, unknown>).excerpt as string;
-  }
 
   const watcherInput: WatcherInput = {
     declaredTask: run.declaredTask,
@@ -283,68 +512,66 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
     action,
     sensitivity,
     recentEvents,
-    lastReadExcerpt,
+    lastReadExcerpt: null,
   };
 
-  let verdict: Verdict | null = null;
   const watcherStart = Date.now();
-
   try {
     const judgeFn = testWatcherOverride || judgeAction;
     const watcherResult = await judgeFn(watcherInput);
     watcherMs = Date.now() - watcherStart;
+    const verdict = watcherResult.verdict;
 
-    verdict = watcherResult.verdict;
-
-    // Log one watcher_called event per tier call
-    for (const call of watcherResult.calls) {
-      const callEv = await appendEvent(runId, "watcher_called", {
-        tier: call.tier,
-        model: call.model,
-        decision: call.decision,
-        confidence: call.confidence,
-        tokensIn: call.tokensIn,
-        tokensOut: call.tokensOut,
-        costUsd: call.costUsd,
-        latencyMs: call.latencyMs,
-      });
-      eventIds.push(callEv.id);
+    if (verdict.decision === "freeze") {
+      state = applyRestriction(state, { kind: "freeze_run" }, "watcher");
+      return {
+        outcome: "frozen",
+        verdict,
+        toolResult: null,
+        message: `Run frozen by Watcher: ${verdict.reasons.join("; ")}`,
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+      };
     }
 
-    const verdictEv = await appendEvent(runId, "verdict_issued", {
-      decision: watcherResult.verdict.decision,
-      intentMatch: watcherResult.verdict.intentMatch,
-      confidence: watcherResult.verdict.confidence,
-      reasons: watcherResult.verdict.reasons,
-      evidence: watcherResult.verdict.evidence,
-      restrictionsCount: watcherResult.verdict.restrictions.length,
-      tier: watcherResult.verdict.tier,
-      model: watcherResult.verdict.model,
-    });
-    eventIds.push(verdictEv.id);
+    if (verdict.decision === "tighten") {
+      const appliedNames: string[] = [];
+      for (const r of verdict.restrictions) {
+        const valid = validateRestriction(r);
+        if (valid) {
+          state = applyRestriction(state, valid, "watcher");
+          appliedNames.push(
+            valid.kind === "revoke_scope"
+              ? `revoked ${valid.tool} ${valid.scope}`
+              : valid.kind
+          );
+        }
+      }
+      return {
+        outcome: "blocked",
+        verdict,
+        toolResult: null,
+        message: `Blocked: action flagged off-task. Applied restrictions: ${appliedNames.join(", ")}.`,
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+      };
+    }
+
+    const toolResult = await executeLegacyTool(action.tool, action.args, runId);
+    return {
+      outcome: "executed",
+      verdict,
+      toolResult,
+      message: "Executed successfully.",
+      permissionVersion: state.version,
+      eventIds,
+      timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+    };
   } catch (err: unknown) {
     watcherMs = Date.now() - watcherStart;
     if (err instanceof WatcherUnavailableError) {
-      // Fail closed: emit watcher_unavailable, outcome held
-      const unavailEv = await appendEvent(runId, "watcher_unavailable", {
-        error: err.message,
-      });
-      eventIds.push(unavailEv.id);
-
-      await prisma.run.update({
-        where: { id: runId },
-        data: {
-          status: "paused_held",
-          heldAction: action as any,
-        },
-      });
-
-      const heldEv = await appendEvent(runId, "action_held", {
-        reason: "Watcher unavailable. Failing closed to held state.",
-        heldAction: action,
-      });
-      eventIds.push(heldEv.id);
-
       return {
         outcome: "held",
         verdict: null,
@@ -352,141 +579,10 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
         message: "Held: Watcher service is currently unavailable. Held for manual authorization.",
         permissionVersion: state.version,
         eventIds,
-        timings: {
-          hardLimitMs,
-          watcherMs,
-          totalMs: Date.now() - startTime,
-        },
+        timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
       };
     }
     throw err;
   }
-
-  if (!verdict) {
-    throw new Error("Unexpected state: Watcher verdict was not produced.");
-  }
-
-  // Step 4: Apply verdict
-  if (verdict.decision === "freeze") {
-    state = applyRestriction(state, { kind: "freeze_run" }, "watcher");
-    await prisma.run.update({
-      where: { id: runId },
-      data: {
-        status: "frozen",
-        permissionState: state as any,
-      },
-    });
-
-    const freezeEv = await appendEvent(runId, "run_frozen", {
-      reasons: verdict.reasons,
-      evidence: verdict.evidence,
-    });
-    eventIds.push(freezeEv.id);
-
-    return {
-      outcome: "frozen",
-      verdict,
-      toolResult: null,
-      message: `Run frozen by Watcher: ${verdict.reasons.join("; ")}`,
-      permissionVersion: state.version,
-      eventIds,
-      timings: {
-        hardLimitMs,
-        watcherMs,
-        totalMs: Date.now() - startTime,
-      },
-    };
-  }
-
-  if (verdict.decision === "tighten") {
-    const appliedNames: string[] = [];
-    for (const r of verdict.restrictions) {
-      const valid = validateRestriction(r);
-      if (valid) {
-        state = applyRestriction(state, valid, "watcher");
-        appliedNames.push(
-          valid.kind === "revoke_scope"
-            ? `revoked ${valid.tool} ${valid.scope}`
-            : valid.kind
-        );
-        const restrEv = await appendEvent(runId, "restriction_applied", {
-          restriction: valid,
-          by: "watcher",
-          version: state.version,
-        });
-        eventIds.push(restrEv.id);
-      }
-    }
-
-    await prisma.run.update({
-      where: { id: runId },
-      data: {
-        permissionState: state as any,
-      },
-    });
-
-    const blockMsg = `Blocked: action flagged off-task. Applied restrictions: ${appliedNames.join(", ")}.`;
-    const blockedEv = await appendEvent(runId, "action_blocked", {
-      reason: blockMsg,
-      reasons: verdict.reasons,
-    });
-    eventIds.push(blockedEv.id);
-
-    return {
-      outcome: "blocked",
-      verdict,
-      toolResult: null,
-      message: blockMsg,
-      permissionVersion: state.version,
-      eventIds,
-      timings: {
-        hardLimitMs,
-        watcherMs,
-        totalMs: Date.now() - startTime,
-      },
-    };
-  }
-
-  // Step 5: For allow and warn -> executeTool
-  try {
-    const toolResult = await executeTool(action.tool, action.args, runId);
-
-    // If path was sensitive, mark sensitiveRead = true
-    if (sensitivity === "sensitive") {
-      state.sensitiveRead = true;
-      await prisma.run.update({
-        where: { id: runId },
-        data: {
-          permissionState: state as any,
-        },
-      });
-    }
-
-    const execEv = await appendEvent(runId, "action_executed", {
-      tool: action.tool,
-      args: action.args,
-      sensitivity,
-      warning: verdict.decision === "warn",
-    });
-    eventIds.push(execEv.id);
-
-    return {
-      outcome: "executed",
-      verdict,
-      toolResult,
-      message: verdict.decision === "warn" ? `Executed with warning: ${verdict.reasons.join("; ")}` : "Executed successfully.",
-      permissionVersion: state.version,
-      eventIds,
-      timings: {
-        hardLimitMs,
-        watcherMs,
-        totalMs: Date.now() - startTime,
-      },
-    };
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    const errEv = await appendEvent(runId, "error", { message: errMsg });
-    eventIds.push(errEv.id);
-    throw err;
-  }
 }
+

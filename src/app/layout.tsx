@@ -67,6 +67,18 @@ export default function RootLayout({
               >
                 Approvals
               </Link>
+              <Link
+                href="/playground"
+                className="font-medium text-zinc-400 hover:text-white transition-colors"
+              >
+                Playground
+              </Link>
+              <Link
+                href="/audit"
+                className="font-medium text-zinc-400 hover:text-white transition-colors"
+              >
+                Audit Chain
+              </Link>
               <div className="hidden sm:flex items-center space-x-2 text-zinc-400 text-[11px] font-mono border-l border-[#23242c] pl-4">
                 <span className="text-zinc-500">Nebius Token Factory</span>
                 <span className="text-zinc-700">•</span>

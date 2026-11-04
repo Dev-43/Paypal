@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "../../../../../lib/db";
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
 import {
   verifyApproverToken,
   APPROVER_COOKIE_NAME,
-} from "../../../../../lib/auth/approver";
-import { appendEvent } from "../../../../../lib/audit/chain";
-import { executeTool } from "../../../../../lib/paypal/executor";
-import { performLedgerCheck } from "../../../../../lib/ledger/check";
+} from "@/lib/auth/approver";
+import { appendEvent } from "@/lib/audit/chain";
+import { executeTool } from "@/lib/paypal/executor";
+import { performLedgerCheck } from "@/lib/ledger/check";
 
 export const dynamic = "force-dynamic";
 
@@ -103,7 +104,7 @@ export async function POST(
         where: { id: approval.runId },
         data: {
           status: ledgerCheckResult.check.status === "MISMATCH" ? "frozen" : "running",
-          heldAction: null,
+          heldAction: Prisma.DbNull,
           permissionState: ledgerCheckResult.nextPermissionState as any,
         },
       });
@@ -121,7 +122,7 @@ export async function POST(
         where: { id: approval.runId },
         data: {
           status: "running",
-          heldAction: null,
+          heldAction: Prisma.DbNull,
         },
       });
     }

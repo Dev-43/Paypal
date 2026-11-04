@@ -266,6 +266,7 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
       const watcherResult = await judgeFn(watcherInput);
       watcherMs = Date.now() - watcherStart;
       verdict = watcherResult.verdict;
+      if (!verdict) throw new Error("Missing verdict");
 
       const verdictEv = await appendEvent(runId, "verdict_issued", {
         decision: verdict.decision,
@@ -300,8 +301,20 @@ export async function gatewayCall(input: GatewayCallInput): Promise<GatewayCallR
       };
     }
 
+    if (!verdict) {
+      return {
+        outcome: "held",
+        verdict: null,
+        toolResult: null,
+        message: "Held: No verdict generated.",
+        permissionVersion: state.version,
+        eventIds,
+        timings: { hardLimitMs, watcherMs, totalMs: Date.now() - startTime },
+      };
+    }
+
     // Apply Watcher Tighten or Freeze
-    if (verdict?.decision === "freeze") {
+    if (verdict.decision === "freeze") {
       state = applyRestriction(state, { kind: "freeze_run" }, "watcher");
       await prisma.run.update({
         where: { id: runId },

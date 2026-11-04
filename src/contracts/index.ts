@@ -319,6 +319,7 @@ export const WatcherInputSchema = z.object({
   sensitivity: SensitivitySchema,
   recentEvents: z.array(RecentEventSummarySchema).max(10),
   lastReadExcerpt: z.string().max(300).nullable(),
+  untrustedTextsRead: z.array(z.string()).optional(),
 });
 export type WatcherInput = z.infer<typeof WatcherInputSchema>;
 

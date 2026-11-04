@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getScenario } from "../../../../lib/scenarios/definitions";
+import { getScenario } from "@/lib/scenarios/definitions";
 
 export const dynamic = "force-dynamic";
 

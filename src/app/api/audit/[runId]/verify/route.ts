@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyChain } from "../../../../../lib/audit/chain";
+import { verifyChain } from "@/lib/audit/chain";
 
 export const dynamic = "force-dynamic";
 

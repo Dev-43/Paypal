@@ -10,6 +10,16 @@ export const ToolNameSchema = z.enum([
   "write_file",
   "query_invoices",
   "send_email",
+  "get_order",
+  "get_dispute",
+  "list_disputes",
+  "get_refund",
+  "get_invoice",
+  "list_invoices",
+  "create_refund",
+  "pay_order",
+  "create_invoice",
+  "create_payout",
 ]);
 export type ToolName = z.infer<typeof ToolNameSchema>;
 

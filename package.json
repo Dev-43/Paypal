@@ -12,7 +12,8 @@
     "seed": "tsx --env-file=.env prisma/seed.ts",
     "evals": "tsx --env-file=.env evals/run-evals.ts",
     "db:push": "prisma db push",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "seed:paypal": "tsx scripts/seed-sandbox.ts"
   },
   "dependencies": {
     "@paypal/agent-toolkit": "1.11.0",

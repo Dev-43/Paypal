@@ -52,6 +52,7 @@ export function getOrCreateToolkit(): any {
       clientSecret: process.env.PAYPAL_CLIENT_SECRET || "mock_secret",
       configuration: {
         actions: ALL_TOOLS_ENABLED,
+        context: { sandbox: true },
       },
     });
     return toolkitInstance;
@@ -117,6 +118,25 @@ export async function executeTool(
   const toolkit = getOrCreateToolkit();
   const toolFn = typeof toolkit.executeTool === "function"
     ? (args: any) => toolkit.executeTool(envelope.tool, args)
+    : typeof toolkit.handleToolCall === "function"
+    ? async (args: any) => {
+        const res = await toolkit.handleToolCall({
+          id: `call_${Date.now()}`,
+          type: "function",
+          function: {
+            name: envelope.tool,
+            arguments: JSON.stringify(args || {}),
+          },
+        });
+        if (typeof res?.content === "string") {
+          try {
+            return JSON.parse(res.content);
+          } catch {
+            return res.content;
+          }
+        }
+        return res?.content ?? res;
+      }
     : typeof toolkit[envelope.tool] === "function"
     ? (args: any) => toolkit[envelope.tool](args)
     : async (args: any) => {

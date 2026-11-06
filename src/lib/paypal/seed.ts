@@ -7,7 +7,7 @@
 
 import fs from "fs";
 import path from "path";
-import { getSandboxAccessToken } from "./token";
+import { getValidAccessToken } from "./token";
 
 export interface SeededScenarioObjects {
   scenarioId: string;
@@ -117,7 +117,7 @@ export async function seedSandboxObjects(forceRefresh = false): Promise<SandboxS
 
   // Live sandbox provisioning
   try {
-    const token = await getSandboxAccessToken();
+    const token = await getValidAccessToken();
     const headers = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",

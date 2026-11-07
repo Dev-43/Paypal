@@ -47,9 +47,15 @@ export default function PlaygroundPage() {
       const runData = await runRes.json();
       if (!runRes.ok) throw new Error(runData.error?.message || "Failed to start run");
 
+      const inScope = runData.inScopeOrder || runData.provisionedOrders?.[0];
       setLogs((prev) => [
         ...prev,
         `Run ${runData.runId} initiated in protected mode.`,
+        ...(inScope ? [
+          `Provisioned Fresh Order: ${inScope.orderId}`,
+          `Capture ID: ${inScope.captureId} ($${inScope.amount} ${inScope.currency})`,
+          `Custom ID: ${inScope.customId || "N/A"}`
+        ] : []),
         "Pawl Gateway intercepting proposed agent tool calls...",
         "Deterministic money rules (P1-P8) applied.",
         "Intent Watcher model evaluating prompt injection safety.",

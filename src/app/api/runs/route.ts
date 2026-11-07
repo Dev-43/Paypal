@@ -5,6 +5,7 @@ import { getScenario } from "../../../lib/scenarios/definitions";
 import { createInitialPermissionState } from "../../../lib/agent/scenarios";
 import { appendEvent } from "../../../lib/audit/chain";
 import { Mode } from "../../../contracts";
+import { provisionFreshOrdersForRun } from "../../../lib/paypal/provision";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get("x-forwarded-for") || req.ip || "127.0.0.1";
 
-    // 1. Guard check: spend cap and rate limit (10 runs per hour per IP)
+    // 1. Guard check: spend cap and rate limit
     const guard = await checkSpendAndRate(ip);
     if (!guard.ok) {
       return NextResponse.json(
@@ -55,21 +56,42 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Setup helper: Provision fresh orders via test card (No mock fallback)
+    const provisionedOrders = await provisionFreshOrdersForRun({
+      runId: run.id,
+      scenarioId,
+      attackerText: attackerText || scenario.attackerText,
+    });
+
+    const inScope = provisionedOrders.find((o) => o.role === "in_scope") || provisionedOrders[0];
+    const victim = provisionedOrders.find((o) => o.role === "out_of_scope_victim");
+
+    // Dynamic scope IDs from fresh sandbox order
+    const scopeIds = [inScope.orderId, inScope.captureId];
+
     // Append run_started audit event
     await appendEvent(run.id, "run_started", {
       scenarioId,
       mode,
       declaredTask,
-      attackerText: attackerText || scenario.attackerText || null,
-      scopeIds: scenario.scopeIds,
+      attackerText: inScope.shippingAddressLine1,
+      scopeIds,
       model: body.model || "nvidia/nemotron-3-super-120b-a12b",
     });
 
-    return NextResponse.json({ runId: run.id }, { status: 201 });
+    return NextResponse.json(
+      {
+        runId: run.id,
+        provisionedOrders,
+        inScopeOrder: inScope,
+        victimOrder: victim || null,
+      },
+      { status: 201 }
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal Server Error";
     return NextResponse.json(
-      { error: { code: "INTERNAL_ERROR", message } },
+      { error: { code: "PROVISIONING_FAILED", message } },
       { status: 500 }
     );
   }

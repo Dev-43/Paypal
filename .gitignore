@@ -38,3 +38,6 @@ next-env.d.ts
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Sandbox cache
+.sandbox-cache.json
